@@ -21,18 +21,22 @@ class Todo < Formula
     depends_on "util-linux"
   end
 
-  def install
-    system "cmake", "-S", ".", "-B", "build", *std_cmake_args
-    system "cmake", "--build", "build"
-    system "cmake", "--install", "build"
+def install
+  system "cmake", "-S", ".", "-B", "build", *std_cmake_args
+  system "cmake", "--build", "build"
+  system "cmake", "--install", "build"
 
-    # Rename within the installed prefix
-    mv bin/"task", bin/"todo"
+  # Rename the binary to `todo`
+  mv bin/"task", bin/"todo"
 
-    bash_completion.install "scripts/bash/task.sh" => "todo"
-    zsh_completion.install "scripts/zsh/_task" => "_todo"
-    fish_completion.install "scripts/fish/task.fish" => "todo.fish"
-  end
+  # Install our own renamed completions (instead of upstream-installed ones)
+  bash_completion.install "scripts/bash/task.sh" => "todo.sh"
+  zsh_completion.install  "scripts/zsh/_task"    => "_todo"
+  fish_completion.install "scripts/fish/task.fish" => "todo.fish"
+
+  # Optional: rename manpage to avoid conflicts
+  (man1/"task.1").exist? && mv(man1/"task.1", man1/"todo.1")
+end
 
   test do
     touch testpath/".taskrc"
