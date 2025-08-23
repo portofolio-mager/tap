@@ -1,4 +1,4 @@
-# Portofolio-mager Tap
+# Portofolio Mager Homebrew Tap
 
 ## How do I install these formulae?
 
@@ -11,6 +11,12 @@ Or, in a `brew bundle` `Brewfile`:
 ```ruby
 tap "portofolio-mager/tap"
 brew "<formula>"
+```
+
+## Examples
+
+```bash
+brew install portofolio-mager/tap/todo
 ```
 
 ## Documentation
