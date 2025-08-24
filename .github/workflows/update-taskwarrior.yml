@@ -5,6 +5,10 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   update-taskwarrior:
     runs-on: ubuntu-latest
@@ -21,21 +25,38 @@ jobs:
       - name: Get latest Taskwarrior release
         id: get_release
         run: |
-          latest=$(curl -s https://api.github.com/repos/GothenburgBitFactory/taskwarrior/releases/latest | jq -r .tag_name)
+          set -euo pipefail
+          latest=$(curl -fsSL https://api.github.com/repos/GothenburgBitFactory/taskwarrior/releases/latest | jq -r .tag_name)
+          # Normalize to ensure it starts with 'v'
+          case "$latest" in
+            v*) ;;
+            *) latest="v$latest" ;;
+          esac
           echo "latest_version=$latest" >> $GITHUB_OUTPUT
+          echo "Latest version: $latest"
 
       - name: Get current version from Formula/todo.rb
         id: get_current
         run: |
-          current=$(grep -Eio "^v?([0-9]+(\.[0-9]+)+)" Formula/todo.rb | head -1)
+          set -euo pipefail
+          # Extract version from the URL in the formula
+          current=$(grep -Eo "releases/download/v[0-9]+(\.[0-9]+)+" Formula/todo.rb | head -1 | awk -F/ '{print $3}')
+          if [ -z "$current" ]; then
+            echo "Could not extract current version from Formula/todo.rb" >&2
+            exit 1
+          fi
           echo "current_version=$current" >> $GITHUB_OUTPUT
+          echo "Current version: $current"
 
       - name: Compare versions
         id: compare
         run: |
+          echo "Comparing: latest=${{ steps.get_release.outputs.latest_version }} vs current=${{ steps.get_current.outputs.current_version }}"
           if [ "${{ steps.get_release.outputs.latest_version }}" != "${{ steps.get_current.outputs.current_version }}" ]; then
+            echo "Update needed"
             echo "update_needed=true" >> $GITHUB_OUTPUT
           else
+            echo "No update needed"
             echo "update_needed=false" >> $GITHUB_OUTPUT
           fi
 
@@ -43,24 +64,39 @@ jobs:
         if: steps.compare.outputs.update_needed == 'true'
         id: get_sha
         run: |
-          version=${{ steps.get_release.outputs.latest_version }}
-          url="https://github.com/GothenburgBitFactory/taskwarrior/releases/download/${version/task/v}/task-${version#v}.tar.gz"
-          curl -L -o task.tar.gz "$url"
-          sha256=$(shasum -a 256 task.tar.gz | awk '{print $1}')
+          set -euo pipefail
+          version="${{ steps.get_release.outputs.latest_version }}"
+          # Construct the correct URL (version already has 'v' prefix)
+          url="https://github.com/GothenburgBitFactory/taskwarrior/releases/download/${version}/task-${version#v}.tar.gz"
+          echo "Downloading from: $url"
+          curl -fsSL -o task.tar.gz "$url"
+          # Use sha256sum on Linux (not shasum)
+          sha256=$(sha256sum task.tar.gz | awk '{print $1}')
           echo "sha256=$sha256" >> $GITHUB_OUTPUT
           echo "url=$url" >> $GITHUB_OUTPUT
+          echo "SHA256: $sha256"
 
       - name: Update Formula/todo.rb
         if: steps.compare.outputs.update_needed == 'true'
         run: |
-          sed -i "" "s|url 'https://github.com/GothenburgBitFactory/taskwarrior/releases/download/.*'|url '${{ steps.get_sha.outputs.url }}'|" Formula/todo.rb
-          sed -i "" "s|sha256 '.*'|sha256 '${{ steps.get_sha.outputs.sha256 }}'|" Formula/todo.rb
+          set -euo pipefail
+          # Use Linux sed syntax (no empty string after -i)
+          # Use more robust patterns that handle both single and double quotes
+          sed -i -E "s|url ['\"]https://github.com/GothenburgBitFactory/taskwarrior/releases/download/[^'\"]+['\"]|url '${{ steps.get_sha.outputs.url }}'|" Formula/todo.rb
+          sed -i -E "s|sha256 ['\"][^'\"]+['\"]|sha256 '${{ steps.get_sha.outputs.sha256 }}'|" Formula/todo.rb
+          echo "Formula updated"
 
       - name: Create Pull Request
         if: steps.compare.outputs.update_needed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: update Taskwarrior to ${{ steps.get_release.outputs.latest_version }}"
           title: "chore: update Taskwarrior to ${{ steps.get_release.outputs.latest_version }}"
-          body: "Automated update of Taskwarrior version and sha256."
+          body: |
+            Automated update of Taskwarrior version to ${{ steps.get_release.outputs.latest_version }}
+            
+            - Updated download URL
+            - Updated SHA256 checksum
           branch: "update-taskwarrior-${{ steps.get_release.outputs.latest_version }}"
+          delete-branch: true
