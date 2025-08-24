@@ -1,0 +1,66 @@
+name: Update Taskwarrior Version
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-taskwarrior:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true # runs 'bundle install' and caches installed gems automatically
+
+      - name: Get latest Taskwarrior release
+        id: get_release
+        run: |
+          latest=$(curl -s https://api.github.com/repos/GothenburgBitFactory/taskwarrior/releases/latest | jq -r .tag_name)
+          echo "latest_version=$latest" >> $GITHUB_OUTPUT
+
+      - name: Get current version from Formula/todo.rb
+        id: get_current
+        run: |
+          current=$(grep -Eio "^v?([0-9]+(\.[0-9]+)+)" Formula/todo.rb | head -1)
+          echo "current_version=$current" >> $GITHUB_OUTPUT
+
+      - name: Compare versions
+        id: compare
+        run: |
+          if [ "${{ steps.get_release.outputs.latest_version }}" != "${{ steps.get_current.outputs.current_version }}" ]; then
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download new tarball and calculate sha256
+        if: steps.compare.outputs.update_needed == 'true'
+        id: get_sha
+        run: |
+          version=${{ steps.get_release.outputs.latest_version }}
+          url="https://github.com/GothenburgBitFactory/taskwarrior/releases/download/${version/task/v}/task-${version#v}.tar.gz"
+          curl -L -o task.tar.gz "$url"
+          sha256=$(shasum -a 256 task.tar.gz | awk '{print $1}')
+          echo "sha256=$sha256" >> $GITHUB_OUTPUT
+          echo "url=$url" >> $GITHUB_OUTPUT
+
+      - name: Update Formula/todo.rb
+        if: steps.compare.outputs.update_needed == 'true'
+        run: |
+          sed -i "" "s|url 'https://github.com/GothenburgBitFactory/taskwarrior/releases/download/.*'|url '${{ steps.get_sha.outputs.url }}'|" Formula/todo.rb
+          sed -i "" "s|sha256 '.*'|sha256 '${{ steps.get_sha.outputs.sha256 }}'|" Formula/todo.rb
+
+      - name: Create Pull Request
+        if: steps.compare.outputs.update_needed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: update Taskwarrior to ${{ steps.get_release.outputs.latest_version }}"
+          title: "chore: update Taskwarrior to ${{ steps.get_release.outputs.latest_version }}"
+          body: "Automated update of Taskwarrior version and sha256."
+          branch: "update-taskwarrior-${{ steps.get_release.outputs.latest_version }}"
